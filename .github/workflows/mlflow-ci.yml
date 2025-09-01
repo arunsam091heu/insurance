@@ -1,68 +1,170 @@
-name: CI/CD with MLflow and GHCR
+name: Build & Deploy FastAPI + Streamlit (single Container App)
 
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+
+env:
+  AZURE_LOCATION: eastus
+  # Change these three names to your liking (all in the SAME Container App)
+  AZURE_GROUP_NAME: fraud-single-rg
+  AZURE_ENV_NAME: fraud-single-env
+  AZURE_CONTAINER_APP_NAME: fraud-single-app
+  REGISTRY_SERVER: ghcr.io
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Checkout repository
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Setup Python
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # 3. Cache pip
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      # 4. Install dependencies
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install mlflow
-
-      # 5. Train and log model with MLflow
-      - name: Train & log model
-        run: |
-          python train.py
-
-      # 6. Upload trained model artifact
-      - name: Upload model.pkl artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: model
-          path: model.pkl
-
-      # 7. Log in to GitHub Container Registry
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 8. Build Docker image
-      - name: Build Docker image
-        run: |
-          docker build -t ghcr.io/${{ github.repository }}/fraud-api:latest .
+      - name: Lowercase the org/repo
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
-      # 9. Push Docker image
-      - name: Push Docker image
-        run: |
-          docker push ghcr.io/${{ github.repository }}/fraud-api:latest
+      - name: Build & Push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile      # <- this Dockerfile must start uvicorn+streamlit+nginx
+          push: true
+          tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Lowercase the org/repo
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Deploy/Update Container App
+        uses: azure/CLI@v1
+        with:
+          inlineScript: |
+            set -e
+            IMAGE="ghcr.io/${{ env.REPO }}:${{ github.sha }}"
+            REGISTRY_USER="${{ github.actor }}"
+            REGISTRY_PASS="${{ secrets.PAT }}"   # Create a classic PAT with read:packages scope
+
+            az config set extension.use_dynamic_install=yes_without_prompt
+
+            # RG & Environment
+            az group create -n ${{ env.AZURE_GROUP_NAME }} -l ${{ env.AZURE_LOCATION }} || true
+            az containerapp env create -n ${{ env.AZURE_ENV_NAME }} -g ${{ env.AZURE_GROUP_NAME }} --location ${{ env.AZURE_LOCATION }} || true
+
+            # Create or Update the app (single container, port 80 via nginx)
+            if ! az containerapp show -n ${{ env.AZURE_CONTAINER_APP_NAME }} -g ${{ env.AZURE_GROUP_NAME }} &>/dev/null; then
+              az containerapp create \
+                -n ${{ env.AZURE_CONTAINER_APP_NAME }} \
+                -g ${{ env.AZURE_GROUP_NAME }} \
+                --environment ${{ env.AZURE_ENV_NAME }} \
+                --image $IMAGE \
+                --ingress external \
+                --target-port 80 \
+                --cpu 2 --memory 4Gi \
+                --registry-server ${{ env.REGISTRY_SERVER }} \
+                --registry-username $REGISTRY_USER \
+                --registry-password $REGISTRY_PASS \
+                --env-vars API_URL=/api/predict-raw
+            else
+              az containerapp registry set \
+                -n ${{ env.AZURE_CONTAINER_APP_NAME }} \
+                -g ${{ env.AZURE_GROUP_NAME }} \
+                --server ${{ env.REGISTRY_SERVER }} \
+                --username $REGISTRY_USER \
+                --password $REGISTRY_PASS
+
+              az containerapp update \
+                -n ${{ env.AZURE_CONTAINER_APP_NAME }} \
+                -g ${{ env.AZURE_GROUP_NAME }} \
+                --image $IMAGE \
+                --cpu 2 --memory 4Gi \
+                --set-env-vars API_URL=/api/predict-raw
+            fi
+
+            echo "✅ Deployed. Get URL:"
+            az containerapp show -n ${{ env.AZURE_CONTAINER_APP_NAME }} -g ${{ env.AZURE_GROUP_NAME }} --query properties.configuration.ingress.fqdn -o tsv
+
+# name: CI/CD with MLflow and GHCR
+
+# on:
+#   push:
+#     branches: [ "main" ]
+#   pull_request:
+#     branches: [ "main" ]
+
+# jobs:
+#   build-and-deploy:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       # 1. Checkout repository
+#       - name: Checkout code
+#         uses: actions/checkout@v4
+
+#       # 2. Setup Python
+#       - name: Set up Python
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.10"
+
+#       # 3. Cache pip
+#       - name: Cache pip
+#         uses: actions/cache@v4
+#         with:
+#           path: ~/.cache/pip
+#           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+#           restore-keys: |
+#             ${{ runner.os }}-pip-
+
+#       # 4. Install dependencies
+#       - name: Install dependencies
+#         run: |
+#           python -m pip install --upgrade pip
+#           pip install -r requirements.txt
+#           pip install mlflow
+
+#       # 5. Train and log model with MLflow
+#       - name: Train & log model
+#         run: |
+#           python train.py
+
+#       # 6. Upload trained model artifact
+#       - name: Upload model.pkl artifact
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: model
+#           path: model.pkl
+
+#       # 7. Log in to GitHub Container Registry
+#       - name: Log in to GitHub Container Registry
+#         uses: docker/login-action@v3
+#         with:
+#           registry: ghcr.io
+#           username: ${{ github.actor }}
+#           password: ${{ secrets.GHCR_PAT }}
+
+#       # 8. Build Docker image
+#       - name: Build Docker image
+#         run: |
+#           docker build -t ghcr.io/${{ github.repository }}/fraud-api:latest .
+
+#       # 9. Push Docker image
+#       - name: Push Docker image
+#         run: |
+#           docker push ghcr.io/${{ github.repository }}/fraud-api:latest
