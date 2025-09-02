@@ -1,4 +1,4 @@
-name: Build & Deploy FastAPI + Streamlit (single Container App)
+name: Build & Deploy FastAPI + Streamlit 
 
 on:
   push:
