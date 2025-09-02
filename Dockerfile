@@ -1,4 +1,4 @@
-# # Dockerfile 
+# # Dockerfile   
 # FROM python:3.10-slim
 
 # WORKDIR /app
@@ -35,4 +35,5 @@ EXPOSE 80
 RUN chmod +x /app/start.sh
 
 CMD ["/app/start.sh"]
+
 
