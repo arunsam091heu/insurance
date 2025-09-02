@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  # Adjust to your preferred names/region
+  # Adjust names/region as you like
   AZURE_LOCATION: eastus
   AZURE_GROUP_NAME: fraud-single-rg
   AZURE_ENV_NAME: fraud-single-env
@@ -32,7 +32,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
@@ -41,7 +41,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile              # Dockerfile must run nginx + uvicorn + streamlit via start.sh
+          file: ./Dockerfile          # Dockerfile should run nginx + uvicorn + streamlit via start.sh
           push: true
           tags: |
             ghcr.io/${{ env.REPO }}:${{ github.sha }}
@@ -57,34 +57,41 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # (Optional but harmless) ensure subscription context is set for all az commands
-      - name: Set subscription context
-        run: az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate subscription context
+        shell: bash
+        run: |
+          set -e
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          echo "Current subscription:"
+          az account show --query "{name:name, id:id, state:state}" -o tsv
+          STATE=$(az account show --query "state" -o tsv)
+          if [ "$STATE" != "Enabled" ]; then
+            echo "::error::Subscription state is '$STATE' (must be Enabled)."
+            exit 1
+          fi
 
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
-      - name: Create or Update Azure Container App
+      - name: Create/Update Azure Container App
         uses: azure/CLI@v1
         with:
           inlineScript: |
             set -e
-            az account show
-
             IMAGE="ghcr.io/${{ env.REPO }}:${{ github.sha }}"
             REGISTRY_USER="${{ github.actor }}"
             REGISTRY_PASS="${{ secrets.PAT }}"   # PAT must have read:packages (SSO-enabled if org uses SSO)
 
             az config set extension.use_dynamic_install=yes_without_prompt
 
-            echo "🔧 Ensure resource group & environment exist"
+            echo "Ensuring Resource Group and Container App Environment exist (idempotent)..."
             az group create -n "${{ env.AZURE_GROUP_NAME }}" -l "${{ env.AZURE_LOCATION }}" || true
             az containerapp env create \
               -n "${{ env.AZURE_ENV_NAME }}" \
               -g "${{ env.AZURE_GROUP_NAME }}" \
               --location "${{ env.AZURE_LOCATION }}" || true
 
-            echo "🚀 Create or update Container App"
+            echo "Create or update Container App…"
             if ! az containerapp show -n "${{ env.AZURE_CONTAINER_APP_NAME }}" -g "${{ env.AZURE_GROUP_NAME }}" &>/dev/null; then
               az containerapp create \
                 -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
@@ -114,78 +121,8 @@ jobs:
                 --set-env-vars API_URL=/api/predict-raw
             fi
 
-            echo "🌐 Public URL:"
+            echo "Public FQDN:"
             az containerapp show \
               -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
               -g "${{ env.AZURE_GROUP_NAME }}" \
               --query properties.configuration.ingress.fqdn -o tsv
-
-
-# name: CI/CD with MLflow and GHCR
-
-# on:
-#   push:
-#     branches: [ "main" ]
-#   pull_request:
-#     branches: [ "main" ]
-
-# jobs:
-#   build-and-deploy:
-#     runs-on: ubuntu-latest
-
-#     steps:
-#       # 1. Checkout repository
-#       - name: Checkout code
-#         uses: actions/checkout@v4
-
-#       # 2. Setup Python
-#       - name: Set up Python
-#         uses: actions/setup-python@v5
-#         with:
-#           python-version: "3.10"
-
-#       # 3. Cache pip
-#       - name: Cache pip
-#         uses: actions/cache@v4
-#         with:
-#           path: ~/.cache/pip
-#           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-#           restore-keys: |
-#             ${{ runner.os }}-pip-
-
-#       # 4. Install dependencies
-#       - name: Install dependencies
-#         run: |
-#           python -m pip install --upgrade pip
-#           pip install -r requirements.txt
-#           pip install mlflow
-
-#       # 5. Train and log model with MLflow
-#       - name: Train & log model
-#         run: |
-#           python train.py
-
-#       # 6. Upload trained model artifact
-#       - name: Upload model.pkl artifact
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: model
-#           path: model.pkl
-
-#       # 7. Log in to GitHub Container Registry
-#       - name: Log in to GitHub Container Registry
-#         uses: docker/login-action@v3
-#         with:
-#           registry: ghcr.io
-#           username: ${{ github.actor }}
-#           password: ${{ secrets.GHCR_PAT }}
-
-#       # 8. Build Docker image
-#       - name: Build Docker image
-#         run: |
-#           docker build -t ghcr.io/${{ github.repository }}/fraud-api:latest .
-
-#       # 9. Push Docker image
-#       - name: Push Docker image
-#         run: |
-#           docker push ghcr.io/${{ github.repository }}/fraud-api:latest
