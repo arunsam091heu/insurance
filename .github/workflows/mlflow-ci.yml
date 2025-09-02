@@ -1,5 +1,4 @@
-name: Build & Deploy FastAPI + Streamlit 
-
+name: Build & Deploy FastAPI + Stream
 on:
   push:
     branches: [ "main" ]
