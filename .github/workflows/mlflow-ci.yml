@@ -1,19 +1,18 @@
-name: Build & Deploy FastAPI + Stream
+name: Build & Deploy FastAPI + Streamlit (Container App - Central Asia)
+
 on:
   push:
     branches: [ "main" ]
 
-# Needed to push to GHCR with GITHUB_TOKEN
 permissions:
   contents: read
-  packages: write
+  packages: write   # needed for GHCR push
 
 env:
-  # Adjust names/region as you like
-  AZURE_LOCATION: eastus
-  AZURE_GROUP_NAME: fraud-single-rg
-  AZURE_ENV_NAME: fraud-single-env
-  AZURE_CONTAINER_APP_NAME: fraud-single-app
+  AZURE_LOCATION: centralasia        # ✅ changed from eastus to centralasia
+  AZURE_GROUP_NAME: fraud-central-rg
+  AZURE_ENV_NAME: fraud-central-env
+  AZURE_CONTAINER_APP_NAME: fraud-central-app
   REGISTRY_SERVER: ghcr.io
 
 jobs:
@@ -26,7 +25,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR (GITHUB_TOKEN)
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -40,104 +39,107 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile          # Dockerfile should run nginx + uvicorn + streamlit via start.sh
+          file: ./Dockerfile
           push: true
           tags: |
             ghcr.io/${{ env.REPO }}:${{ github.sha }}
             ghcr.io/${{ env.REPO }}:latest
+
   deploy:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Azure Login (with SP)
+      - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-  
-      # Try to set subscription from secret; if empty, fall back to default from az account list.
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Ensure subscription context
         shell: bash
         run: |
           set -e
-          # Prefer explicit secret
           SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           if [ -z "$SUB" ]; then
-            echo "AZURE_SUBSCRIPTION_ID secret is empty. Attempting to detect default subscription from current login..."
-            SUB=$(az account list --query "[?isDefault].id | [0]" -o tsv || true)
-          fi
-  
-          if [ -z "$SUB" ]; then
-            echo "::error::No subscription id available. Set repository secret AZURE_SUBSCRIPTION_ID, or ensure the Service Principal has access to at least one Enabled subscription."
-            echo "Subscriptions visible to this principal:"
-            az account list -o table || true
+            echo "::error:: AZURE_SUBSCRIPTION_ID secret is missing."
             exit 1
           fi
-  
-          echo "Using subscription: $SUB"
           az account set --subscription "$SUB"
-  
-          # Validate state
-          STATE=$(az account show --query "state" -o tsv)
-          if [ "$STATE" != "Enabled" ]; then
-            echo "::error::Subscription '$SUB' state is '$STATE' (must be Enabled)."
-            exit 1
-          fi
-          echo "Subscription context OK."
-  
+          echo "Current subscription:"
+          az account show --query "{name:name, id:id, state:state}" -o tsv
+
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-  
+
       - name: Create/Update Azure Container App
         uses: azure/CLI@v1
         with:
           inlineScript: |
             set -e
+
+            RG="${{ env.AZURE_GROUP_NAME }}"
+            LOC="${{ env.AZURE_LOCATION }}"
+            ENV="${{ env.AZURE_ENV_NAME }}"
+            APP="${{ env.AZURE_CONTAINER_APP_NAME }}"
+
             IMAGE="ghcr.io/${{ env.REPO }}:${{ github.sha }}"
+            REGISTRY_SERVER="ghcr.io"
             REGISTRY_USER="${{ github.actor }}"
-            REGISTRY_PASS="${{ secrets.PAT }}"   # PAT must have read:packages (SSO-enabled if org uses SSO)
-  
+            PAT="${{ secrets.PAT }}"   # Classic PAT with read:packages if GHCR private
+
             az config set extension.use_dynamic_install=yes_without_prompt
-  
-            echo "Ensuring Resource Group and Container App Environment exist..."
-            az group create -n "${{ env.AZURE_GROUP_NAME }}" -l "${{ env.AZURE_LOCATION }}" || true
-            az containerapp env create \
-              -n "${{ env.AZURE_ENV_NAME }}" \
-              -g "${{ env.AZURE_GROUP_NAME }}" \
-              --location "${{ env.AZURE_LOCATION }}" || true
-  
-            if ! az containerapp show -n "${{ env.AZURE_CONTAINER_APP_NAME }}" -g "${{ env.AZURE_GROUP_NAME }}" &>/dev/null; then
-              echo "Creating Container App..."
-              az containerapp create \
-                -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
-                -g "${{ env.AZURE_GROUP_NAME }}" \
-                --environment "${{ env.AZURE_ENV_NAME }}" \
-                --image "$IMAGE" \
-                --ingress external \
-                --target-port 80 \
-                --cpu 2 --memory 4Gi \
-                --registry-server ghcr.io \
-                --registry-username "$REGISTRY_USER" \
-                --registry-password "$REGISTRY_PASS" \
-                --env-vars API_URL=/api/predict-raw
+
+            echo "🧰 Ensure Resource Group exists"
+            az group create -n "$RG" -l "$LOC" 1>/dev/null
+
+            echo "🔎 Check if Container Apps Environment exists"
+            if az containerapp env show -n "$ENV" -g "$RG" 1>/dev/null 2>&1; then
+              echo "✅ Environment '$ENV' already exists in $LOC"
             else
-              echo "Updating Container App..."
-              az containerapp registry set \
-                -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
-                -g "${{ env.AZURE_GROUP_NAME }}" \
-                --server ghcr.io \
-                --username "$REGISTRY_USER" \
-                --password "$REGISTRY_PASS"
-  
+              echo "🆕 Creating Environment '$ENV' in $LOC..."
+              az containerapp env create -n "$ENV" -g "$RG" --location "$LOC"
+            fi
+
+            echo "🔐 Registry authentication"
+            if [ -z "$PAT" ]; then
+              echo "🟢 PAT not set → assuming GHCR image is PUBLIC"
+              REGISTRY_ARGS=""
+            else
+              echo "🟠 PAT set → using GHCR PRIVATE registry auth"
+              REGISTRY_ARGS="--registry-server $REGISTRY_SERVER --registry-username $REGISTRY_USER --registry-password $PAT"
+            fi
+
+            echo "🔎 Check if Container App exists"
+            if az containerapp show -n "$APP" -g "$RG" 1>/dev/null 2>&1; then
+              echo "🔄 Updating Container App..."
+              if [ -n "$PAT" ]; then
+                az containerapp registry set \
+                  -n "$APP" -g "$RG" \
+                  --server "$REGISTRY_SERVER" \
+                  --username "$REGISTRY_USER" \
+                  --password "$PAT"
+              fi
               az containerapp update \
-                -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
-                -g "${{ env.AZURE_GROUP_NAME }}" \
+                -n "$APP" -g "$RG" \
                 --image "$IMAGE" \
                 --cpu 2 --memory 4Gi \
                 --set-env-vars API_URL=/api/predict-raw
+            else
+              echo "🆕 Creating Container App..."
+              # shellcheck disable=SC2086
+              az containerapp create \
+                -n "$APP" -g "$RG" \
+                --environment "$ENV" \
+                --ingress external \
+                --target-port 80 \
+                --cpu 2 --memory 4Gi \
+                --image "$IMAGE" \
+                $REGISTRY_ARGS \
+                --env-vars API_URL=/api/predict-raw
             fi
-  
-            echo "Public FQDN:"
-            az containerapp show \
-              -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
-              -g "${{ env.AZURE_GROUP_NAME }}" \
-              --query properties.configuration.ingress.fqdn -o tsv
+
+            echo "🌐 Public FQDN:"
+            az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv
+
+
+
