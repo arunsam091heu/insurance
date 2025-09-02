@@ -46,33 +46,48 @@ jobs:
           tags: |
             ghcr.io/${{ env.REPO }}:${{ github.sha }}
             ghcr.io/${{ env.REPO }}:latest
-
   deploy:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Azure Login (with subscription)
+      - name: Azure Login (with SP)
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Validate subscription context
+  
+      # Try to set subscription from secret; if empty, fall back to default from az account list.
+      - name: Ensure subscription context
         shell: bash
         run: |
           set -e
-          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          echo "Current subscription:"
-          az account show --query "{name:name, id:id, state:state}" -o tsv
-          STATE=$(az account show --query "state" -o tsv)
-          if [ "$STATE" != "Enabled" ]; then
-            echo "::error::Subscription state is '$STATE' (must be Enabled)."
+          # Prefer explicit secret
+          SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          if [ -z "$SUB" ]; then
+            echo "AZURE_SUBSCRIPTION_ID secret is empty. Attempting to detect default subscription from current login..."
+            SUB=$(az account list --query "[?isDefault].id | [0]" -o tsv || true)
+          fi
+  
+          if [ -z "$SUB" ]; then
+            echo "::error::No subscription id available. Set repository secret AZURE_SUBSCRIPTION_ID, or ensure the Service Principal has access to at least one Enabled subscription."
+            echo "Subscriptions visible to this principal:"
+            az account list -o table || true
             exit 1
           fi
-
+  
+          echo "Using subscription: $SUB"
+          az account set --subscription "$SUB"
+  
+          # Validate state
+          STATE=$(az account show --query "state" -o tsv)
+          if [ "$STATE" != "Enabled" ]; then
+            echo "::error::Subscription '$SUB' state is '$STATE' (must be Enabled)."
+            exit 1
+          fi
+          echo "Subscription context OK."
+  
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-
+  
       - name: Create/Update Azure Container App
         uses: azure/CLI@v1
         with:
@@ -81,18 +96,18 @@ jobs:
             IMAGE="ghcr.io/${{ env.REPO }}:${{ github.sha }}"
             REGISTRY_USER="${{ github.actor }}"
             REGISTRY_PASS="${{ secrets.PAT }}"   # PAT must have read:packages (SSO-enabled if org uses SSO)
-
+  
             az config set extension.use_dynamic_install=yes_without_prompt
-
-            echo "Ensuring Resource Group and Container App Environment exist (idempotent)..."
+  
+            echo "Ensuring Resource Group and Container App Environment exist..."
             az group create -n "${{ env.AZURE_GROUP_NAME }}" -l "${{ env.AZURE_LOCATION }}" || true
             az containerapp env create \
               -n "${{ env.AZURE_ENV_NAME }}" \
               -g "${{ env.AZURE_GROUP_NAME }}" \
               --location "${{ env.AZURE_LOCATION }}" || true
-
-            echo "Create or update Container App…"
+  
             if ! az containerapp show -n "${{ env.AZURE_CONTAINER_APP_NAME }}" -g "${{ env.AZURE_GROUP_NAME }}" &>/dev/null; then
+              echo "Creating Container App..."
               az containerapp create \
                 -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
                 -g "${{ env.AZURE_GROUP_NAME }}" \
@@ -101,18 +116,19 @@ jobs:
                 --ingress external \
                 --target-port 80 \
                 --cpu 2 --memory 4Gi \
-                --registry-server "${{ env.REGISTRY_SERVER }}" \
+                --registry-server ghcr.io \
                 --registry-username "$REGISTRY_USER" \
                 --registry-password "$REGISTRY_PASS" \
                 --env-vars API_URL=/api/predict-raw
             else
+              echo "Updating Container App..."
               az containerapp registry set \
                 -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
                 -g "${{ env.AZURE_GROUP_NAME }}" \
-                --server "${{ env.REGISTRY_SERVER }}" \
+                --server ghcr.io \
                 --username "$REGISTRY_USER" \
                 --password "$REGISTRY_PASS"
-
+  
               az containerapp update \
                 -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
                 -g "${{ env.AZURE_GROUP_NAME }}" \
@@ -120,7 +136,7 @@ jobs:
                 --cpu 2 --memory 4Gi \
                 --set-env-vars API_URL=/api/predict-raw
             fi
-
+  
             echo "Public FQDN:"
             az containerapp show \
               -n "${{ env.AZURE_CONTAINER_APP_NAME }}" \
