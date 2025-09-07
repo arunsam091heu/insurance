@@ -1,40 +1,29 @@
-## Dockerfile   
-# FROM python:3.10-slim
-
-# WORKDIR /app
-
-# COPY requirements.txt .
-# RUN pip install --no-cache-dir -r requirements.txt mlflow
-
-# COPY . .
-
-# EXPOSE 8000
-# CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
-
+# Dockerfile
 FROM python:3.10-slim
 
-# System deps for nginx
-RUN apt-get update && apt-get install -y --no-install-recommends nginx && rm -rf /var/lib/apt/lists/*
+# System deps for nginx (and certs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nginx ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Python deps
+# ---------- Python deps ----------
 COPY requirements.txt .
+# Make sure requirements.txt includes: fastapi uvicorn[standard] streamlit pandas joblib
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App code (FastAPI: api.py, Streamlit: app_streamlit.py, nginx.conf, start.sh)
-COPY . .
+# ---------- App code ----------
+# (copy files explicitly to avoid .dockerignore surprises)
+COPY api.py preprocess.py app_streamlit.py start.sh nginx.conf ./
+# Model/data needed at startup (so Uvicorn won't crash)
+COPY model.pkl fraud_oracle.csv ./
 
-# Nginx config: route "/" -> Streamlit(8502), "/api" -> FastAPI(8000)
+# Nginx config
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# Expose single port 80 (nginx)
+# Normalize Windows CRLF -> LF and ensure start.sh is executable
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
+
 EXPOSE 80
-
-# Make start script executable
-RUN chmod +x /app/start.sh
-
 CMD ["/app/start.sh"]
-
-
-
