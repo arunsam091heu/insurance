@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  AZURE_LOCATION: australiacentral
+  AZURE_LOCATION: southindia
   AZURE_GROUP_NAME: fraud-central-rg
   AZURE_ENV_NAME: fraud-central-env
   AZURE_CONTAINER_APP_NAME: fraud-central-app
