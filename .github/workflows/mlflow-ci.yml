@@ -10,8 +10,8 @@ permissions:
 
 env:
   AZURE_LOCATION: southindia
-  AZURE_GROUP_NAME: fraud-central-rg
-  AZURE_ENV_NAME: fraud-central-env
+  AZURE_GROUP_NAME: fraud-centralRESOURCE
+  AZURE_ENV_NAME: fraud-central
   AZURE_CONTAINER_APP_NAME: fraud-central-app
   REGISTRY_SERVER: ghcr.io
 
