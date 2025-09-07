@@ -1,25 +1,26 @@
+# Dockerfile (FastAPI + nginx)
 FROM python:3.10-slim
 
-# Nginx + curl for quick checks
+# System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Python deps (make sure your requirements has fastapi, uvicorn[standard], streamlit, pandas, joblib)
+# Python deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# ensure fastapi + uvicorn are in requirements.txt; if unsure, add this next line:
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir "uvicorn[standard]"
 
-# Copy app files explicitly (avoid .dockerignore surprises)
-COPY api.py preprocess.py app_streamlit.py start.sh nginx.conf ./
+# App files
+COPY api.py preprocess.py start.sh nginx.conf ./
 
-# ✅ COPY your artifacts so Uvicorn won’t crash on startup
-COPY model.pkl fraud_oracle.csv ./
-
-# Nginx config + start script hygiene
-COPY nginx.conf /etc/nginx/nginx.conf
+# Normalize start.sh and make executable
 RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
+
+# Nginx config
+COPY nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 80
 CMD ["/app/start.sh"]
