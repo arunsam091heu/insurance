@@ -31,7 +31,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
