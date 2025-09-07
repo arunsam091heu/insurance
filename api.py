@@ -67,9 +67,10 @@ def _startup():
         load_model_and_schema()
         startup_error = None
     except Exception as e:
-        # Do NOT crash; keep API up and report degraded health
+        import logging
         startup_error = f"{type(e).__name__}: {e}"
-        log.exception("Startup load failed: %s", startup_error)
+        logging.exception("Startup load failed: %s", startup_error)
+
 
 class RawRow(RootModel[Dict[str, Any]]): 
     pass
@@ -129,3 +130,4 @@ def predict_numeric(rows: List[NumericRow]):
     except Exception:
         probs = None
     return {"predictions": preds.tolist(), "probabilities_for_class_1": probs}
+
