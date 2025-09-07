@@ -4,12 +4,13 @@ on:
   push:
     branches: [ "main" ]
 
+# Needed to push to GHCR with GITHUB_TOKEN
 permissions:
   contents: read
-  packages: write   # needed for GHCR push
+  packages: write
 
 env:
-  AZURE_LOCATION: centralasia        # ✅ changed from eastus to centralasia
+  AZURE_LOCATION: centralasia
   AZURE_GROUP_NAME: fraud-central-rg
   AZURE_ENV_NAME: fraud-central-env
   AZURE_CONTAINER_APP_NAME: fraud-central-app
@@ -22,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
@@ -30,7 +31,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
@@ -49,29 +50,35 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Azure Login
+      # 👇 Use creds JSON ONLY. Do not pass client-id/tenant-id/subscription-id here.
+      - name: Azure Login (creds JSON)
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Set subscription explicitly (from secret) or fail clearly
       - name: Ensure subscription context
         shell: bash
         run: |
           set -e
           SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           if [ -z "$SUB" ]; then
-            echo "::error:: AZURE_SUBSCRIPTION_ID secret is missing."
+            echo "::error:: AZURE_SUBSCRIPTION_ID secret is missing. Add it in repo Settings → Secrets."
             exit 1
           fi
           az account set --subscription "$SUB"
           echo "Current subscription:"
           az account show --query "{name:name, id:id, state:state}" -o tsv
+          STATE=$(az account show --query "state" -o tsv)
+          if [ "$STATE" != "Enabled" ]; then
+            echo "::error:: Subscription state is '$STATE' (must be Enabled)."
+            exit 1
+          fi
 
       - name: Lowercase owner/repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
-      - name: Create/Update Azure Container App
+      - name: Create/Update Azure Container App (Central Asia)
         uses: azure/CLI@v1
         with:
           inlineScript: |
@@ -83,16 +90,16 @@ jobs:
             APP="${{ env.AZURE_CONTAINER_APP_NAME }}"
 
             IMAGE="ghcr.io/${{ env.REPO }}:${{ github.sha }}"
-            REGISTRY_SERVER="ghcr.io"
+            REGISTRY_SERVER="${{ env.REGISTRY_SERVER }}"
             REGISTRY_USER="${{ github.actor }}"
-            PAT="${{ secrets.PAT }}"   # Classic PAT with read:packages if GHCR private
+            PAT="${{ secrets.PAT }}"  # Classic PAT with read:packages if GHCR is private
 
             az config set extension.use_dynamic_install=yes_without_prompt
 
             echo "🧰 Ensure Resource Group exists"
             az group create -n "$RG" -l "$LOC" 1>/dev/null
 
-            echo "🔎 Check if Container Apps Environment exists"
+            echo "🔎 Check if Container Apps Environment exists (in this RG)"
             if az containerapp env show -n "$ENV" -g "$RG" 1>/dev/null 2>&1; then
               echo "✅ Environment '$ENV' already exists in $LOC"
             else
@@ -100,12 +107,12 @@ jobs:
               az containerapp env create -n "$ENV" -g "$RG" --location "$LOC"
             fi
 
-            echo "🔐 Registry authentication"
+            echo "🔐 Configure registry auth"
             if [ -z "$PAT" ]; then
-              echo "🟢 PAT not set → assuming GHCR image is PUBLIC"
+              echo "🟢 No PAT provided → assuming GHCR image is PUBLIC"
               REGISTRY_ARGS=""
             else
-              echo "🟠 PAT set → using GHCR PRIVATE registry auth"
+              echo "🟠 PAT provided → using GHCR PRIVATE registry auth"
               REGISTRY_ARGS="--registry-server $REGISTRY_SERVER --registry-username $REGISTRY_USER --registry-password $PAT"
             fi
 
@@ -113,11 +120,8 @@ jobs:
             if az containerapp show -n "$APP" -g "$RG" 1>/dev/null 2>&1; then
               echo "🔄 Updating Container App..."
               if [ -n "$PAT" ]; then
-                az containerapp registry set \
-                  -n "$APP" -g "$RG" \
-                  --server "$REGISTRY_SERVER" \
-                  --username "$REGISTRY_USER" \
-                  --password "$PAT"
+                az containerapp registry set -n "$APP" -g "$RG" \
+                  --server "$REGISTRY_SERVER" --username "$REGISTRY_USER" --password "$PAT"
               fi
               az containerapp update \
                 -n "$APP" -g "$RG" \
@@ -140,6 +144,3 @@ jobs:
 
             echo "🌐 Public FQDN:"
             az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv
-
-
-
