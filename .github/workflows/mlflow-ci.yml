@@ -1,4 +1,4 @@
-name: Build & Deploy FastAPI + Streamlit  (Container App - Central India)
+name: Build & Deploy FastAPI + Streamlit  (Container App - Central India) 
 
 on:
   push:
