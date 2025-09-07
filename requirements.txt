@@ -15,3 +15,5 @@ plotly>=5.20.0
 # Frontend (if using Streamlit UI)
 streamlit>=1.36.0
 requests>=2.31.0
+
+pydantic
