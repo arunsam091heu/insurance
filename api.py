@@ -265,4 +265,9 @@ def predict_numeric(rows: List[NumericRow]):
         probs = model.predict_proba(df)[:, 1].tolist()
     except Exception:
         pass
-    return {"predictions": preds, "probabilities_for_class_1": probs}
+
+    if preds[0] ==1:
+        value= "Fraud"
+    else:
+        value="Not Fraud"
+    return {"predictions": value, "probabilities_for_Fraud": probs}
