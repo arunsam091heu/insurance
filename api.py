@@ -244,11 +244,8 @@ def predict_raw(rows: List[RawRow]):
         probs = model.predict_proba(df_proc)[:, 1].tolist()
     except Exception:
         pass
-   if preds[0] ==1:
-        value= "Fraud"
-    else:
-        value="Not Fraud"
-    return {"predictions": value, "probabilities_for_Fraud": probs}
+    labels = ["Fraud" if p == 1 else "Not Fraud" for p in preds_list]
+    return {"predictions": labels, "probabilities_for_Fraud": probs_list}
 
 @app.post("/predict")
 def predict_numeric(rows: List[NumericRow]):
@@ -270,9 +267,8 @@ def predict_numeric(rows: List[NumericRow]):
     except Exception:
         pass
 
-    if preds[0] ==1:
-        value= "Fraud"
-    else:
-        value="Not Fraud"
-    return {"predictions": value, "probabilities_for_Fraud": probs}
+
+    labels = ["Fraud" if p == 1 else "Not Fraud" for p in preds_list]
+    return {"predictions": labels, "probabilities_for_Fraud": probs_list}
+
 
