@@ -1,4 +1,4 @@
-import json, logging, os
+import json, logging, os  
 from fastapi import FastAPI, HTTPException
 from pydantic import RootModel
 from typing import List, Dict, Any, Optional
@@ -130,4 +130,5 @@ def predict_numeric(rows: List[NumericRow]):
     except Exception:
         probs = None
     return {"predictions": preds.tolist(), "probabilities_for_class_1": probs}
+
 
