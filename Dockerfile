@@ -12,6 +12,7 @@ WORKDIR /app
 COPY requirements.txt .
 # ensure fastapi + uvicorn are in requirements.txt; if unsure, add this next line:
 RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir "uvicorn[standard]"
+COPY model.pkl ./model.pkl
 
 # App files
 COPY api.py preprocess.py start.sh nginx.conf ./
@@ -24,3 +25,4 @@ COPY nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 80
 CMD ["/app/start.sh"]
+
