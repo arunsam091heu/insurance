@@ -15,7 +15,7 @@ TARGET_COL = "FraudFound_P"  # not expected in inference payloads; dropped if pr
 # --------- App ----------
 app = FastAPI(
     title="Insurance Fraud Predictor",
-    description="Minimal FastAPI with only prediction endpoints.",
+    description=" FastAPI with prediction.",
     version="1.0",
     docs_url="/docs",
     redoc_url=None,
@@ -242,3 +242,4 @@ def predict_numeric(rows: List[NumericRow]):
 
     labels = ["Fraud" if p == 1 else "Not Fraud" for p in preds_list]
     return {"predictions": labels, "probabilities_for_Fraud": probs_list}
+
