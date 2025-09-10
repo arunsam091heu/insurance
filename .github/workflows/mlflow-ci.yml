@@ -1,4 +1,4 @@
-name: Build & Deploy FastAPI + Streamlit  (Container App - Central India) 
+name: Build & Deploy FastAPI  (Container App ) 
 
 on:
   push:
@@ -99,18 +99,18 @@ jobs:
 
             az config set extension.use_dynamic_install=yes_without_prompt
 
-            echo "🧰 Ensure Resource Group exists"
+            echo " Ensure Resource Group exists"
             az group create -n "$RG" -l "$LOC" 1>/dev/null
 
-            echo "🔎 Check if Container Apps Environment exists"
+            echo " Check if Container Apps Environment exists"
             if az containerapp env show -n "$ENV" -g "$RG" 1>/dev/null 2>&1; then
-              echo "✅ Environment '$ENV' already exists in $LOC"
+              echo " Environment '$ENV' already exists in $LOC"
             else
-              echo "🆕 Creating Environment '$ENV' in $LOC..."
+              echo " Creating Environment '$ENV' in $LOC..."
               az containerapp env create -n "$ENV" -g "$RG" --location "$LOC"
             fi
 
-            echo "🔐 Set GHCR registry credentials (for private image)"
+            echo " Set GHCR registry credentials (for private image)"
             # This creates/updates the registry secret on the app (no-op if app doesn't exist yet)
             az containerapp registry set \
               -n "$APP" -g "$RG" \
@@ -118,16 +118,16 @@ jobs:
               --username "$REGISTRY_USER" \
               --password "$REGISTRY_PASS" || true
 
-            echo "🔎 Check if Container App exists"
+            echo " Check if Container App exists"
             if az containerapp show -n "$APP" -g "$RG" 1>/dev/null 2>&1; then
-              echo "🔄 Updating Container App..."
+              echo " Updating Container App..."
               az containerapp update \
                 -n "$APP" -g "$RG" \
                 --image "$IMAGE" \
                 --cpu 2 --memory 4Gi \
                 --set-env-vars API_URL=/api/predict-raw
             else
-              echo "🆕 Creating Container App..."
+              echo " Creating Container App..."
               az containerapp create \
                 -n "$APP" -g "$RG" \
                 --environment "$ENV" \
@@ -141,6 +141,6 @@ jobs:
                 --env-vars API_URL=/api/predict-raw
             fi
 
-            echo "🌐 Public FQDN:"
+            echo " Public FQDN:"
             az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv
 
