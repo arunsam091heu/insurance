@@ -1,0 +1,1 @@
+Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*,HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, Publisher | Where-Object {$_.DisplayName -like "*VS Code*" -or $_.DisplayName -like "*Storage Explorer*" -or $_.DisplayName -like "*DB Viewer*"} | Format-Table –AutoSize
